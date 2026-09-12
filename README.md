@@ -25,10 +25,21 @@ Most write-ups on AD DS setup show the "happy path" — click here, click there,
 
 ## Environment reference
 
-| VM | OS | Role | Static IP |
-|----|-----|------|-----------|
-| DC1 | Windows Server 2025 | Domain Controller / DNS / DHCP | 30.30.30.10 |
-| — | Windows 11 Pro | Domain client | DHCP-assigned |
-| — | Windows 11 Enterprise | Domain client | DHCP-assigned |
+| VM | OS | Role | IP | Site |
+|----|-----|------|-----|------|
+| DC1 | Windows Server 2025 | Domain Controller / DNS / DHCP | 30.30.30.10 | HeadOffice |
+| DC2 | Windows Server 2025 | Domain Controller / DNS / DHCP (standby) | 30.30.30.9 | HeadOffice |
+| DC3-BRANCH | Windows Server 2025 | Domain Controller / DNS | 30.30.40.10 | BranchOffice-Beijing |
+| DC4-REMOTE | Windows Server 2025 | Domain Controller / DNS | 30.30.50.10 | RemoteOffice |
+| pfSense | FreeBSD (pfSense CE 2.9) | Firewall / Router | 30.30.30.5 (WAN) | — |
+| Win11 Pro | Windows 11 Pro | Domain client | DHCP-assigned | HeadOffice |
+| Win11 Entre | Windows 11 Enterprise | Domain client | DHCP-assigned | BranchOffice-Beijing |
+| Win11 Pro-2 | Windows 11 Pro | Domain client | DHCP-assigned | RemoteOffice |
 
-**Network:** VMnet3 (NAT) — `30.30.30.0/24`, gateway `30.30.30.2`
+**Networks:**
+- VMnet3 (NAT) — 30.30.30.0/24, gateway 30.30.30.2 (Headquarters)
+- Branch Beijing VMnet (Host-only) — 30.30.40.0/24, gateway 30.30.40.1 (pfSense LAN)
+- Remote Office VMnet (Host-only) — 30.30.50.0/24, gateway 30.30.50.1 (pfSense OPT1)
+
+**Domain:** oneil.local
+**DHCP:** Centralised on DC1/DC2 with failover, pfSense relays for branch subnets
