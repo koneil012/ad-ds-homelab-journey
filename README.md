@@ -18,7 +18,7 @@ Most write-ups on AD DS setup show the "happy path" — click here, click there,
 | # | Entry | Topics covered |
 |---|-------|-----------------|
 | 01 | [VMware Networking Setup](01-vmware-networking-setup.md) | Custom VMnets, host-only vs NAT, subnet/gateway config, DHCP range gotchas |
-| 02 | AD DS Installation *(coming soon)* | Domain naming decisions, promoting the DC, FQDN structure |
+| 02 | [AD DS Learning Journal](02-ad-ds-learning-journal.md) | AD DS concepts, FSMO roles, Sites and Services, pfSense setup |
 | 03 | DNS & DHCP Integration *(coming soon)* | DNS troubleshooting, secure dynamic updates, migrating DHCP off VMware onto the DC |
 | 04 | Domain-Joining Clients *(coming soon)* | Client DNS config, domain join process, first domain login |
 | 05 | Users, OUs & Group Policy *(coming soon)* | Structuring the directory, first GPOs |
