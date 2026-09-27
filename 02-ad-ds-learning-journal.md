@@ -6,15 +6,13 @@
 
 ## Active Directory Domain Services — Core Concepts
 
-A **forest** is the top-level security boundary in Active Directory. My lab forest is oneil.local.
+A **forest** is the top-level security boundary in Active Directory. My lab forest is `oneil.local`.
 
-A **tree** is a collection of domains that share the same contiguous namespace under a forest. For example: hr.oneil.local, it.oneil.local, sales.oneil.local — all under the oneil.local forest.
+A **tree** is a collection of domains that share the same contiguous namespace under a forest. For example: `hr.oneil.local`, `it.oneil.local`, `sales.oneil.local` — all under the `oneil.local` forest.
 
 A **domain** is a logical grouping of objects — users, computers, groups, policies, and OUs — managed under one namespace.
 
 **Organisational Units (OUs)** let admins logically organise objects within a domain. A **site** represents the physical network topology. The **schema** defines the structure of the AD database — what object types exist and what attributes they carry.
-
-A **Global Catalog** is a special role assigned to domain controllers. It keeps a full writable copy of its own domain's objects and a read-only partial copy of objects from other domains in the forest — basically a forest-wide directory index. The partial copy contains only frequently used attributes (user logon name, first name, last name, email, etc.) stored in something called the Partial Attribute Set. Global Catalog uses port 389 for LDAP and port 636 for LDAP over SSL.
 
 A **domain controller (DC)** is a server running Active Directory. **DNS is critical** to AD's functionality — it's used to locate domain controllers, authenticate users, and support domain join operations.
 
@@ -22,11 +20,32 @@ A **domain controller (DC)** is a server running Active Directory. **DNS is crit
 
 ---
 
+## Global Catalog
+
+A **Global Catalog (GC)** is a special role assigned to domain controllers. It keeps a full writable copy of its own domain's objects and a read-only partial copy of objects from other domains in the forest — basically a forest-wide directory index. The partial copy contains only frequently used attributes (user logon name, first name, last name, email, etc.) stored in something called the **Partial Attribute Set**.
+
+**Ports used:**
+- `389` : LDAP
+- `636` : LDAP over SSL
+- `3268` : Global Catalog queries
+- `3269` : Global Catalog over SSL
+
+**Global Catalog commands:**
+
+- `nltest /dclist:oneil.local` : lists all domain controllers in the domain
+- `nltest /dsgetdc:oneil.local /GC` : finds which DCs are Global Catalog servers
+- `Get-ADDomainController -Filter * | Select-Object HostName, Site, IsGlobalCatalog` : shows all DCs with their GC status and site assignment
+- `Test-NetConnection DC1.oneil.local -Port 3268` : tests whether a specific DC is responding on the Global Catalog port (useful for verifying GC is reachable)
+
+To enable or disable Global Catalog on a DC: Active Directory Sites and Services > Sites > your site > Servers > the DC > right-click NTDS Settings > Properties > check or uncheck "Global Catalog."
+
+---
+
 ## Adding a Second Domain Controller for Redundancy
 
-I learned how to add an additional domain controller for redundancy. The process is mostly the same as setting up the first DC — install the AD DS role, run the promotion wizard — but instead of selecting "Add a new forest," I selected "Add a domain controller to an existing domain" and pointed it at oneil.local.
+I learned how to add an additional domain controller for redundancy. The process is mostly the same as setting up the first DC — install the AD DS role, run the promotion wizard — but instead of selecting "Add a new forest," I selected "Add a domain controller to an existing domain" and pointed it at `oneil.local`.
 
-One thing I need to emphasise because I learned it the hard way: **DHCP on the second DC is not configured the same way as the first.** You don't just create an identical scope on DC2. Instead, you go to the main domain controller (DC1), right-click the existing scope, and configure failover — adding DC2 as a hot standby partner with 5% of addresses reserved for it. If you duplicate the scope manually, both servers hand out addresses from the same range without coordinating, and you get IP conflicts. I found this out when some newly joined client PCs weren't working properly.
+One thing I need to emphasise because I learned it the hard way: **DHCP on the second DC is not configured the same way as the first.** You don't just create an identical scope on DC2. Instead, you go to the main domain controller (DC1), right-click the existing scope, and configure failover — adding DC2 as a hot standby partner with 5% of addresses reserved for it. If you duplicate the scope manually, both servers hand out addresses from the same range without coordinating, and you get IP conflicts.
 
 ---
 
@@ -34,13 +53,16 @@ One thing I need to emphasise because I learned it the hard way: **DHCP on the s
 
 Replication takes all the OUs, workstations, users, group policies, objects, passwords, and configurations from one DC and replicates them to the others. This is handled automatically by the **KCC (Knowledge Consistency Checker)**, which builds the replication topology and determines which DCs replicate with which.
 
-**Commands I use regularly:**
+**Replication commands:**
 
-- `repadmin /replsummary` — check the replication summary across all DCs (shows failures and last sync times)
-- `repadmin /showrepl` — show detailed replication info per partition (useful to pinpoint errors)
-- `repadmin /syncall /APed` — force replication across all DCs and all partitions
-- `repadmin /showconn` — show the actual replication connections (who pulls from whom)
-- `repadmin /istg` — show which DC is the Inter-Site Topology Generator for each site
+- `repadmin /replsummary` : shows the replication summary across all DCs — useful for diagnosing when the last replication happened and if there were any errors
+- `repadmin /showrepl` : shows detailed replication info per partition — useful to pinpoint exactly which partition is failing and with which partner
+- `repadmin /syncall /APed` : forces replication across all DCs and all partitions (A=all partitions, P=push, e=enterprise/cross-site, d=show by distinguished name)
+- `repadmin /replicate DC1 DC3-BRANCH DC=oneil,DC=local` : forces a specific partition sync from one DC to another — surgical precision when you only need one partition fixed
+- `repadmin /showconn` : shows all replication connections — who pulls from whom, whether intrasite or intersite, and whether auto-generated by KCC or manually created
+- `repadmin /istg` : shows which DC is the Inter-Site Topology Generator for each site — the DC responsible for calculating replication paths between sites
+- `repadmin /kcc DC1` : forces the KCC to recalculate the replication topology on a specific DC
+- `repadmin /bridgeheads` : shows the bridgehead servers responsible for inter-site replication
 
 ---
 
@@ -55,11 +77,14 @@ These are roles that ensure certain critical operations are only performed by on
 
 **Domain-wide roles:**
 
-- **PDC Emulator** — handles password change verification (checks with this DC before rejecting a password in case it was recently changed on another DC), acts as the authoritative time source for the domain, and serves as the default target for GPO edits.
-- **RID Master** — allocates pools of unique Relative Identifiers to each DC so that when multiple DCs create objects simultaneously, no two objects end up with the same SID.
+- **PDC Emulator** — handles password change verification (checks with this DC before rejecting a password in case it was recently changed on another DC), acts as the authoritative time source for the domain, and serves as the default target for GPO edits. This is the most active FSMO role and the one whose loss is felt fastest.
+- **RID Master** — allocates pools of unique Relative Identifiers to each DC so that when multiple DCs create objects simultaneously, no two objects end up with the same SID. It hands out pools to DCs, not individual IDs to objects — so if the RID Master goes down, DCs can still create objects using their remaining pre-allocated pool.
 - **Infrastructure Master** — updates cross-domain references when objects in other domains change. Only relevant in multi-domain environments.
 
-To check which DC holds each FSMO role: `netdom query fsmo`
+**FSMO commands:**
+
+- `netdom query fsmo` : shows which DC currently holds each of the five FSMO roles
+- `Move-ADDirectoryServerOperationMasterRole -Identity "DC2" -OperationMasterRole 0,1,2,3,4` : transfers all five roles to another DC (0=PDC, 1=RID, 2=Infrastructure, 3=Schema, 4=DomainNaming)
 
 ---
 
@@ -69,95 +94,261 @@ This console represents the physical structure of your Active Directory — wher
 
 I assigned each DC to its respective site and created subnet objects linked to each site. This helps the KCC map where all the DCs are and build efficient replication paths between them. It also means clients authenticate with the nearest DC — a laptop in Beijing talks to DC3-BRANCH, not DC1 at headquarters.
 
+**Sites and Services commands:**
+
+- `repadmin /istg` : shows which server is generating the topology in each site
+- `repadmin /showconn` : shows the topology connections between DCs
+
+---
+
+## DNS — Forward and Reverse Lookup Zones
+
+DNS in Active Directory has two types of lookup zones:
+
+**Forward Lookup Zone** — resolves a name to an IP address. "I know the name `DC1.oneil.local`, what's the IP?" Answer: `30.30.30.10`. This is created automatically during AD DS promotion because AD literally cannot function without it.
+
+**Reverse Lookup Zone** — resolves an IP address back to a name. "I know the IP `30.30.30.10`, which machine is that?" Answer: `DC1.oneil.local`. Uses PTR (Pointer) records. This is NOT created automatically because AD doesn't strictly require it to function.
+
+**Why reverse zones matter:**
+
+- **nslookup diagnostics** — without a reverse zone, nslookup shows "Server: Unknown" because it can't reverse-resolve the DNS server's IP to a hostname. I had this exact issue — setting DC1's DNS to `30.30.30.10` instead of `127.0.0.1` fixed it because the reverse zone existed for the `30.30.30.x` range but not for the loopback address.
+- **Security logging** — when you see a suspicious connection from `30.30.30.45` in your logs, reverse lookup immediately tells you which machine it is.
+- **Email anti-spam** — mail servers do reverse lookups to verify senders.
+
+**Important:** when creating a reverse zone, make sure to check "Store the zone in Active Directory" — without this, the "Allow only secure dynamic updates" option isn't available.
+
+I created reverse lookup zones for all three subnets (30.30.30.0/24, 30.30.40.0/24, 30.30.50.0/24) as AD-integrated zones with secure dynamic updates.
+
+---
+
+## DNS — SRV Records and Site-Aware Authentication
+
+This is how AD clients find the right domain controller automatically. When a domain-joined machine boots up, it doesn't randomly pick a DC — it queries DNS for **SRV (Service) records** specific to its AD site.
+
+**DNS SRV commands:**
+
+- `nslookup -type=SRV _ldap._tcp.ONEIL-BranchOffice-Beijing._sites.dc._msdcs.oneil.local` : shows which DC serves LDAP for the Beijing site — returns `DC3-Branch.oneil.local` on port 389
+- `Resolve-DnsName -Name _ldap._tcp.dc._msdcs.oneil.local -Type SRV` : PowerShell equivalent — lists all DCs providing LDAP services domain-wide
+- `Resolve-DnsName -Name _kerberos._tcp.dc._msdcs.oneil.local -Type SRV` : shows which DCs are handling Kerberos authentication
+- `Resolve-DnsName -Name _ldap._tcp.gc._msdcs.oneil.local -Type SRV` : shows which DCs are Global Catalog servers via SRV records
+
+This is the mechanism that makes a laptop in Beijing authenticate against DC3-BRANCH locally instead of reaching all the way back to DC1 at headquarters.
+
+---
+
+## DNS and DC Health Checks
+
+**DC health commands:**
+
+- `dcdiag /v` : gives detailed DC health — runs all tests verbosely
+- `dcdiag /test:dns /v` : one of the most important DNS-specific health checks
+- `dcdiag /test:DFSREvent` : tests DFSR (SYSVOL replication) specifically — frequently fails in labs due to VM shutdowns causing temporary RPC errors that clear themselves
+- `dcdiag /s:DC1` : runs all diagnostics targeting a specific DC
+
+**DNS validation commands:**
+
+- `nslookup oneil.local` : confirms basic DNS resolution for the domain
+- `ipconfig /all` : shows what DNS servers the machine is using
+- `nltest /dclist:oneil.local` : lists all domain controllers in the domain
+- `Get-DnsClientServerAddress` : PowerShell equivalent showing DNS client settings
+
+**Critical DNS zones to validate in DNS Manager:**
+
+- Forward Lookup Zones (oneil.local)
+- Reverse Lookup Zones (for each subnet)
+- `_msdcs.oneil.local` (contains SRV records for DC locator)
+
+**Important note about dcdiag results:** always check the **timestamps** in the event log, not just whether it says "passed" or "failed." An error from 14 hours ago followed by a success is completely different from an error 3 minutes ago. In a lab environment, temporary errors from VM shutdowns/restarts are expected and not a sign of a real problem.
+
 ---
 
 ## Setting Up pfSense — The Full Journey
 
 ### Why I Needed pfSense
 
-I'm running four Windows Server 2025 VMs and three Windows 11 client PCs in VMware Workstation, spread across three subnets to simulate a multi-site enterprise. The problem was simple: VMs on different subnets can't talk to each other without a router between them. I had DC3-BRANCH sitting on 30.30.40.0/24 and it couldn't reach DC1 on 30.30.30.0/24 at all — like two houses on different streets with no road connecting them.
-
-I had three options: give DC1 a second NIC (quick hack), use Windows Server's RRAS role (software router), or deploy pfSense as a dedicated firewall/router VM. My AD DS course used pfSense, so I went with that — and it turned out to be one of the most educational parts of the whole lab.
+I'm running four Windows Server 2025 VMs and three Windows 11 client PCs in VMware Workstation, spread across three subnets to simulate a multi-site enterprise. VMs on different subnets can't talk to each other without a router between them. pfSense became my dedicated firewall/router VM, and it turned out to be one of the most educational parts of the whole lab.
 
 ### The Network Topology
-
-Here's how everything connects. pfSense sits in the middle with three NICs — one foot in each subnet — routing traffic between all three sites:
 
 ![Network Topology](topology.png)
 
 ### Installation — Fighting the Great Firewall
 
-I downloaded the AMD64 ISO (the one specifically for virtual machines), created a FreeBSD 14 VM in VMware with three NICs pointed at my three VMnets, and started the installation. My first mistake was setting the RAM to 256MB — pfSense needs at least 512MB, and I bumped it to 1GB after the installer started hanging.
+I downloaded the AMD64 ISO, created a FreeBSD 14 VM in VMware with three NICs pointed at my three VMnets. My first mistake was setting the RAM to 256MB — pfSense needs at least 512MB, and I bumped it to 1GB after the installer started hanging.
 
-But the real nightmare was the package download. pfSense's installer needs to pull 179 packages (298 MiB) from pkg.pfsense.org during installation, and those servers are outside China. The Great Firewall was blocking or throttling the connection — the installer would get about 18 packages in and then stall completely. I tried multiple times, tried older versions, and kept hitting the same wall.
+The real nightmare was the package download. pfSense's installer needs to pull 179 packages (298 MiB) from pkg.pfsense.org, and the Great Firewall was blocking the connection. The fix was running Hiddify in TUN mode on my host PC — since VMware NAT routes all VM traffic through the host's network stack, TUN mode captures pfSense's outbound traffic and pushes it through the VPN tunnel.
 
-The fix was running Hiddify (my VPN client) in TUN mode on my host PC before starting the installation. Since VMware NAT routes all VM traffic through the host's network stack, TUN mode captures pfSense's outbound traffic and pushes it through the VPN tunnel. Proxy mode doesn't work here because it only captures apps configured to use the proxy — VMware's NAT process isn't one of them. Once Hiddify was in TUN mode, the full installation completed in about 10 minutes.
+### Interface Assignment and IP Configuration
 
-### Interface Assignment — A Few Missteps
+After installation, I used the console to assign all three interfaces (WAN → em0, LAN → em1, OPT1 → em2) and configure static IPs:
 
-During installation, pfSense asked me to assign interfaces but only gave me WAN and LAN — it never prompted for OPT1 (the third NIC for the Remote Office). I accidentally clicked "Assign/Configure" instead of "Continue" at the summary screen, which swapped one interface with another instead of adding the third. Then I mistakenly clicked Continue before fixing it, leaving one interface unconfigured.
-
-This wasn't the end of the world — pfSense is fully reconfigurable after installation. Once it booted into the installed system, I used console option 1 (Assign Interfaces) to redo all three assignments cleanly: WAN → em0, LAN → em1, OPT1 → em2. Then I used option 2 (Set Interface IP Address) three times to configure each one.
-
-### IP Configuration
-
-I set static IPs on all three interfaces from the pfSense console:
-
-- **WAN (em0):** 30.30.30.5/24, gateway 30.30.30.2 (VMware NAT), DNS 30.30.30.10 (DC1). I initially tried 30.30.30.1 but it didn't work — VMware reserves that address for the host virtual adapter on NAT networks.
-- **LAN (em1):** 30.30.40.1/24, no gateway, no DHCP. I set "Revert to HTTP" to yes here — important because pfSense only allows web GUI access through the LAN interface, and enabling HTTP avoids HTTPS certificate issues.
-- **OPT1 (em2):** 30.30.50.1/24, no gateway, no DHCP.
-
-### Web GUI and Initial Setup Wizard
-
-I accessed the GUI from DC3 (on the 30.30.40.0/24 subnet) at http://30.30.40.1 using the default credentials (admin / pfsense). The setup wizard walked through hostname, domain, DNS, and timezone. A few critical settings during the wizard:
-
-- **Unchecked "Override DNS"** — since my WAN is static (not DHCP), there's no DNS to override. Leaving it checked could cause pfSense to ignore the DNS server I manually set.
-- **Unchecked "Block RFC1918 Private Networks"** on the WAN interface — this was critical. Without unchecking it, pfSense would block all traffic from headquarters since 30.30.30.0/24 is a private address range, and pfSense treats private addresses on WAN as invalid by default.
-- **Unchecked "Block bogon networks"** — same reason. My entire lab uses private addressing.
+- **WAN (em0):** 30.30.30.5/24, gateway 30.30.30.2 (VMware NAT), DNS 30.30.30.10
+- **LAN (em1):** 30.30.40.1/24, no gateway, no DHCP
+- **OPT1 (em2):** 30.30.50.1/24, no gateway, no DHCP
 
 ### Firewall Rules — The Biggest Gotcha
 
-This was the second hardest part of the whole setup after the GFW download issue. After installation, pfSense was running and interfaces were configured, but cross-subnet pinging was inconsistent.
+After installation, cross-subnet pinging was inconsistent. Three separate issues:
 
-The LAN interface already had default allow-all rules, so traffic from Beijing worked. But OPT1 (Remote Office) was completely empty — no rules at all, meaning all traffic was blocked by default. I added a pass rule: Action Pass, Interface OPT1, Protocol Any, Source OPT1 subnets, Destination Any.
+1. **OPT1 had no rules** — completely empty, blocking all traffic by default. Added a pass rule for OPT1 subnets.
+2. **Windows Firewall on DC3** blocked ICMP from different subnets — had to enable the ICMPv4-In inbound rule.
+3. **WAN had zero firewall rules** — after adding static routes on headquarters machines, traffic was directed at pfSense's WAN interface which blocked everything inbound by default. Added a WAN pass rule for WAN subnets.
 
-Then came the real puzzle. DC3 could ping DC1, but DC1 couldn't ping DC3. I initially thought it was Windows Firewall on DC3 blocking ICMP from a different subnet (which was partially true — I had to enable the ICMPv4-In inbound rule). But the bigger issue surfaced when I added static routes on the headquarters machines.
+Also had to uncheck "Block RFC1918 Private Networks" and "Block bogon networks" on WAN since the entire lab uses private addressing.
 
-Before the static routes, pings from DC1 to DC3 worked through something called proxy ARP — pfSense was silently intercepting traffic without being explicitly told to route it. But once I added the persistent static routes (`route -p add 30.30.40.0 mask 255.255.255.0 30.30.30.5`), traffic was explicitly directed at pfSense's WAN interface — and the WAN had **zero firewall rules**, blocking everything inbound by default.
+### Static Routes and DHCP Relay
 
-The fix was adding a WAN rule: Action Pass, Interface WAN, Protocol Any, Source WAN subnets, Destination Any. After that, bidirectional cross-subnet communication worked perfectly. This was a big lesson — pfSense's default-deny behaviour on WAN is there for security (you don't want random internet traffic getting through), but in a lab environment with internal routing, you have to explicitly open it.
-
-### Static Routes on Headquarters Machines
-
-Every machine on the headquarters subnet (DC1, DC2, Win11 Pro) needed two persistent static routes telling them to send branch and remote traffic through pfSense instead of the VMware NAT gateway:
+Every headquarters machine needed persistent static routes:
 
 ```
 route -p add 30.30.40.0 mask 255.255.255.0 30.30.30.5
 route -p add 30.30.50.0 mask 255.255.255.0 30.30.30.5
 ```
 
-Without these, traffic for 30.30.40.x and 30.30.50.x would go to the default gateway (30.30.30.2, VMware NAT) which has no knowledge of those subnets. This is the same concept as ip helper-address in Cisco — static routing at its most basic, and directly relevant to my CCNA studies.
+For DHCP, I configured pfSense as a DHCP relay instead of running separate DHCP servers per subnet — forwarding requests to DC1 and DC2 at headquarters. This maps directly to the CCNA concept of `ip helper-address`.
 
-### Promoting DC3 and DC4 Through pfSense
+### Key Lessons
 
-With routing working, I promoted DC3-BRANCH (30.30.40.10) and DC4-REMOTE (30.30.50.10) as domain controllers, both using "Add a domain controller to an existing domain" with oneil.local.
+1. pfSense blocks all inbound WAN traffic by default — WAN firewall rules must be explicitly added.
+2. "Block RFC1918 Private Networks" must be unchecked when WAN is on a private subnet.
+3. Every machine needs a static route to reach subnets on the other side of pfSense.
+4. Windows Firewall blocks ICMP from different subnets by default.
+5. Always verify hostnames match expectations — DC3 vs DC3-Branch caused DNS lookup failures.
+6. In China, run your VPN in TUN mode on the host before installing pfSense.
+7. Proxy ARP can make things appear to work when they shouldn't — use explicit static routes.
 
-DC3's initial replication failed with DNS lookup errors. The root cause turned out to be a hostname mismatch — I had named the server "DC3-Branch" (not "DC3"), so `nslookup DC3.oneil.local` failed while `DC3-Branch.oneil.local` resolved correctly. I had to force individual partition syncs using `repadmin /replicate` for each naming context (Domain, Configuration, Schema, DomainDnsZones, ForestDnsZones) before all errors cleared.
+---
 
-DC4-REMOTE replicated cleanly from DC2 with no issues. The KCC automatically built a hub-and-spoke topology: DC1 handles Beijing replication, DC2 handles Remote Office replication, and they replicate intrasite with each other at headquarters.
+## Read-Only Domain Controller (RODC)
 
-### DNS and DHCP Integration
+An RODC holds a read-only copy of the Active Directory database. It can authenticate users and respond to LDAP queries, but it cannot write changes — no creating users, no resetting passwords, no modifying group membership. Deployed in locations where physical security isn't guaranteed.
 
-I created an A record in DC1's DNS (pfsense.oneil.local → 30.30.40.1) so I can access the pfSense GUI at http://pfsense.oneil.local instead of typing the raw IP. I also created reverse lookup zones for both new subnets as AD-integrated zones with secure dynamic updates.
+I deployed DC4-REMOTE2 as an RODC in the Remote Office site. During setup:
 
-For DHCP, instead of running separate DHCP servers on each subnet, I configured pfSense as a DHCP relay — it forwards DHCP requests from the branch and remote subnets to DC1 and DC2 at headquarters. I created a new scope on DC1 for the branch subnet (30.30.40.11–80) and configured failover with DC2, same as the headquarters scope. This way DHCP stays centralised and I manage everything from one place.
+- Checked the **"Read-only domain controller (RODC)"** checkbox during promotion
+- Set a **delegated administrator** (`Remote.Admin`) — note that the delegated admin doesn't automatically get local logon rights. I had to use `dsmgmt` to add them to the RODC's local administrator role separately.
+- Configured the **Password Replication Policy** — controls which account passwords get cached on the RODC.
 
-### Key Lessons from the pfSense Setup
+**Key RODC behaviours:**
 
-1. pfSense blocks all inbound WAN traffic by default. WAN firewall rules must be explicitly added for internal routing.
-2. "Block RFC1918 Private Networks" must be unchecked when the WAN interface is on a private subnet — otherwise all your internal traffic gets dropped.
-3. Every machine that needs to reach a subnet on the other side of pfSense needs a static route pointing to pfSense's IP.
-4. Windows Firewall blocks ICMP from different subnets by default — enabling the ICMPv4-In rule is needed for cross-subnet ping.
-5. Always verify hostnames match what you expect — DC3 vs DC3-Branch caused DNS lookup failures that temporarily broke AD replication.
-6. If you're in China, pfSense package downloads will be blocked by the GFW. Run your VPN in TUN mode on the host before installing.
-7. Proxy ARP can make things appear to work when they shouldn't — always set up explicit static routes rather than relying on implicit behaviour.
+- Only appears as a Destination DSA in `repadmin /replsummary`, never as Source — read-only means it never sends changes outbound.
+- Has a read-only copy of DNS — can answer queries but cannot register or update records. Point the RODC's DNS at a writable DC, not itself.
+
+---
+
+## Cached Credentials and Kerberos Tickets
+
+I learned this when testing the AD Recycle Bin. I deleted a user (AdminKay), then tried to log in as that user — and it worked.
+
+**Why:** The client PC was authenticating against DC3-Branch, which hadn't received the deletion yet (180-minute inter-site replication delay). I verified with `klist` — AdminKay had fresh Kerberos tickets issued by DC3-Branch.
+
+**Kerberos commands:**
+
+- `klist` : shows all active Kerberos tickets for the current user — includes which DC issued them, when they expire, and the encryption type
+- `klist purge` : destroys all cached Kerberos tickets — forces the next authentication to go to a DC fresh instead of using cached tickets
+
+**Fix:** Forced replication (`repadmin /replicate DC3-BRANCH DC1 DC=oneil,DC=local`), purged tickets (`klist purge`), and the next login was correctly rejected.
+
+**Security lesson:** In real-world scenarios where you need to immediately revoke access, **disable the account instead of deleting it** — disabling takes effect faster. Deleting leaves a window where cached credentials or unreplicated DCs can still authenticate the user.
+
+---
+
+## Group Policy Management
+
+A Group Policy is a tool used to centrally manage and configure users and computers in the domain.
+
+**Group Policy Management Console (GPMC)** is the main tool to create, edit, link, back up, and manage GPOs. Found at Server Manager > Tools > Group Policy Management.
+
+**Group Policy Management Editor** opens when you edit a GPO and lets you configure the actual settings.
+
+### GPO Processing Order — LSDOU
+
+1. **L**ocal policy
+2. **S**ite level
+3. **D**omain level
+4. **O**rganisational **U**nit level (closest OU to the object wins)
+
+### Two sections of GPO
+
+**User Configuration** — wallpapers, passwords, mapped drives, logon scripts, desktop restrictions.
+
+**Computer Configuration** — BitLocker, Windows Update, security settings, firewall settings.
+
+### Block Inheritance
+
+Blocks GPOs from parent OUs being applied to child OUs. Shown as a blue exclamation mark on the OU icon.
+
+### Enforced GPO
+
+Overrides Block Inheritance and reverses normal processing order — an Enforced domain-level GPO beats an OU-level GPO, which is the opposite of normal LSDOU. If two GPOs are both Enforced, the one linked higher in the hierarchy wins.
+
+**Block inheritance does not override Enforced GPOs.**
+
+### WMI Filters
+
+Target GPOs to specific systems based on system properties. Example targeting only Windows 10/11 workstations:
+
+```
+SELECT * FROM Win32_OperatingSystem WHERE Version LIKE "10.0%" AND ProductType = "1"
+```
+
+ProductType values: 1 = Workstation, 2 = Domain Controller, 3 = Member Server.
+
+### Loopback Processing
+
+Changes user policies to be based on the **computer's** location instead of the **user's** location. Two modes:
+
+- **Replace** — ignores user's GPO settings entirely, applies only the computer's user settings.
+- **Merge** — applies user's settings first, layers computer's settings on top. Computer wins on conflicts.
+
+Common use cases: kiosk PCs, conference room computers, Remote Desktop servers, training labs.
+
+### Group Policy vs Group Policy Preferences
+
+- **Policies** = enforced, users can't change them, settings greyed out, reverts when GPO removed.
+- **Preferences** = deployed defaults, users can change them, persists when GPO removed.
+
+### Starter GPOs
+
+A template used to standardise new GPOs with pre-defined administrative options.
+
+---
+
+## GPO Troubleshooting
+
+**GPO troubleshooting commands:**
+
+- `gpupdate /force` : forces an immediate Group Policy refresh on the machine — both computer and user policies are re-downloaded and applied
+- `gpresult /r` : shows which GPOs are currently applied to this machine and user — the first thing to run when a GPO isn't working
+- `gpresult /r /scope:computer` : shows only computer policy results — requires admin privileges
+- `gpresult /r /scope:user` : shows only user policy results
+- `gpresult /r /s WINP11RO-3 /scope:computer` : queries a remote machine's applied GPOs from any DC
+- `rsop.msc` : Resultant Set of Policy — shows the final merged result of all GPOs and which specific GPO "won" for each setting
+
+### The troubleshooting process
+
+1. Run `gpresult /r` on the target machine — check what's actually applying
+2. Run `rsop.msc` — check which GPO is winning for the specific setting
+3. Check Group Policy Management console — verify link location, inheritance, enforced status, security filtering, and WMI filters
+
+### Real example from my lab
+
+I moved a computer (WINP11RO-3) from the Workstation OU to the RemoteOffice_Computers OU (which had Block Inheritance enabled). The legal notice GPO should have stopped applying, but it didn't. Running `gpresult /r /scope:computer` showed the computer's DN still pointed to the old OU — because the client was getting GPO from DC3-Branch (Beijing site) which hadn't replicated the OU move yet. After forcing replication and running `gpupdate /force`, the GPO correctly stopped applying.
+
+**Lesson:** when GPO changes aren't taking effect, always check which DC the client is talking to (`gpresult` shows "Group Policy was applied from:") and whether that DC has the latest changes.
+
+---
+
+## Active Directory Recycle Bin
+
+Allows restoring deleted AD objects with almost all their attributes intact — group memberships, permissions, properties, and linked values.
+
+### How to activate
+
+1. Open **Active Directory Administrative Center**
+2. Select your domain > **Enable Recycle Bin**
+3. Confirm (irreversible once enabled)
+4. Wait for replication, or force it: `repadmin /syncall /APed`
+5. Verify: `repadmin /replsummary`
+
+Deleted objects appear in the **Deleted Objects** container where you can right-click and restore them.
